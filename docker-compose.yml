@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  # Next.js Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env.production
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/kusho_db
+      - REDIS_URL=redis://redis:6379
+      - NEXTAUTH_SECRET=your-secret-key-here
+      - NEXTAUTH_URL=http://localhost:${PORT:-3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - kusho-network
+    restart: unless-stopped
+
+  # PostgreSQL Database with pgvector
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      - POSTGRES_DB=kusho_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-vector-db.sql:/docker-entrypoint-initdb.d/init-vector-db.sql:ro
+    networks:
+      - kusho-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d kusho_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - kusho-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Prisma Studio (Optional - for development)
+  studio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/kusho_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - kusho-network
+    command: npx prisma studio --hostname 0.0.0.0
+    profiles:
+      - dev
+  
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin4_container
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: supersecretpassword
+    ports:
+      - "8080:80"
+    volumes:
+      # Mounts a named volume 'pgadmin-data' to the container's data directory
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - kusho-network
+    profiles:
+      - dev
+
+volumes:
+  pgadmin-data: 
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  kusho-network:
+    driver: bridge

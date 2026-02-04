@@ -1,0 +1,80 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// See: https://www.prisma.io/docs/orm/prisma-schema/overview/generators#field-reference-1
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum QuoteKind {
+  Fact
+  Opinion
+}
+
+model Quotes {
+  id        Int       @id @default(autoincrement())
+  quote     String
+  kind      QuoteKind @default(Opinion)
+  createdAt DateTime  @default(now())
+}
+
+model Repository {
+  id          Int       @id @default(autoincrement())
+  name        String    @unique
+  owner       String
+  fullName    String    @unique
+  description String?
+  url         String
+  language    String?
+  stars       Int       @default(0)
+  forks       Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  issues      Issue[]
+  scans       Scan[]
+  
+  @@map("repositories")
+}
+
+model Scan {
+  id                Int      @id @default(autoincrement())
+  repositoryId      Int
+  repository        Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  issuesFetched     Int      @map("issues_fetched")
+  cachedSuccessfully Boolean @default(true) @map("cached_successfully")
+  scanData          Json?    // Store additional scan metadata
+  createdAt         DateTime @default(now())
+  
+  @@map("scans")
+}
+
+model Issue {
+  id          Int       @id @default(autoincrement())
+  repositoryId Int
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  issueNumber Int       @map("issue_number")
+  title       String
+  description String?
+  status      String    @default("open")
+  priority    String    @default("medium")
+  labels      String[]  // Store labels as array
+  author      String?
+  authorUrl   String?   @map("author_url")
+  url         String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  // Vector embedding for semantic search
+  // Using Json to store vector array as workaround
+  embedding   Json?
+  
+  @@unique([repositoryId, issueNumber])
+  @@map("issues")
+}
