@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Next.js Application (Development)
   app:
@@ -12,7 +10,7 @@ services:
       - .env.development.local
     environment:
       - NODE_ENV=development
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/kusho_db_dev
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/ai_db_dev
       - REDIS_URL=redis://redis:6379
       - NEXTAUTH_URL=http://localhost:${PORT:-3000}
       - WATCHPACK_POLLING=true
@@ -22,7 +20,7 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - kusho-network
+      - ai-network
     volumes:
       - .:/app
       - /app/node_modules
@@ -37,7 +35,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg15
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-kusho_db_dev}
+      - POSTGRES_DB=${POSTGRES_DB:-ai_db_dev}
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
     ports:
@@ -46,10 +44,10 @@ services:
       - postgres_dev_data:/var/lib/postgresql/data
       - ./scripts/init-vector-db.sql:/docker-entrypoint-initdb.d/init-vector-db.sql
     networks:
-      - kusho-network
+      - ai-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-kusho_db_dev}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ai_db_dev}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -62,7 +60,7 @@ services:
     volumes:
       - redis_dev_data:/data
     networks:
-      - kusho-network
+      - ai-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -70,12 +68,35 @@ services:
       timeout: 5s
       retries: 5
 
+  # pgAdmin (Development)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_dev_data:/var/lib/pgadmin
+    networks:
+      - ai-network
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - dev
+
 volumes:
   postgres_dev_data:
     driver: local
   redis_dev_data:
     driver: local
+  pgadmin_dev_data:
+    driver: local
 
 networks:
-  kusho-network:
+  ai-network:
     driver: bridge

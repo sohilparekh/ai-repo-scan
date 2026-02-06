@@ -1,5 +1,5 @@
 {
-  "name": "kusho-backend-next",
+  "name": "ai-repo-scan",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -15,8 +15,8 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
-    "docker:build": "docker build -t kusho-backend-next .",
-    "docker:run": "docker run -p ${PORT:-3000}:3000 kusho-backend-next",
+    "docker:build": "docker build -t ai-repo-scan .",
+    "docker:run": "docker run -p ${PORT:-3000}:3000 ai-repo-scan",
     "docker:dev": "docker-compose -f docker-compose.dev.yml up --build",
     "docker:prod": "docker-compose up --build"
   },

@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       const repoResponse = await fetch(`https://api.github.com/repos/${repo}`, {
         headers: {
           'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Kusho-Scanner/1.0',
+          'User-Agent': 'AI-Scanner/1.0',
           // Add GitHub token if available (for higher rate limits)
           ...(process.env.GH_TOKEN && {
             'Authorization': `token ${process.env.GH_TOKEN}`
@@ -154,7 +154,7 @@ export async function POST(request: Request) {
         const response = await fetch(url, {
           headers: {
             'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'Kusho-Scanner/1.0',
+            'User-Agent': 'AI-Scanner/1.0',
             ...(process.env.GH_TOKEN && {
               'Authorization': `token ${process.env.GH_TOKEN}`
             })

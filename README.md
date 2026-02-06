@@ -1,4 +1,4 @@
-# Kusho Backend Next.js
+# AI Repo Scan Backend
 
 A modern Next.js application with Prisma, PostgreSQL, Redis, and Docker support.
 
@@ -26,7 +26,7 @@ A modern Next.js application with Prisma, PostgreSQL, Redis, and Docker support.
 1. Clone the repository:
 ```bash
 git clone <your-repo-url>
-cd kusho-backend-next
+cd ai-repo-scan
 ```
 
 2. Install dependencies:
@@ -98,8 +98,8 @@ Copy `.env.example` to `.env.local` and configure:
 
 ```env
 # Database Configuration
-DATABASE_URL="postgresql://postgres:password@localhost:5432/kusho_db"
-DIRECT_URL="postgresql://postgres:password@localhost:5432/kusho_db"
+DATABASE_URL="postgresql://postgres:password@localhost:5432/ai_db"
+DIRECT_URL="postgresql://postgres:password@localhost:5432/ai_db"
 
 # Redis Configuration
 REDIS_URL="redis://localhost:6379"
