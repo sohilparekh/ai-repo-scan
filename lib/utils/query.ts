@@ -1,8 +1,6 @@
 import prisma from '@/lib/db'
 
 export const getQuotes = async () => {
-  const start = Date.now()
-
   const result = await prisma.quotes.findMany({
     orderBy: {
       id: 'desc',

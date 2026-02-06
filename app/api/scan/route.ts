@@ -1,38 +1,9 @@
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@prisma/client'
 import { EmbeddingService } from '@/lib/embedding'
+import { GitHubRepo, GitHubIssue } from '@/types'
 
 const prisma = new PrismaClient()
-
-interface GitHubIssue {
-  id: number
-  number: number
-  title: string
-  body?: string
-  state: string
-  user: {
-    login: string
-    html_url: string
-  }
-  labels: Array<{
-    name: string
-  }>
-  html_url: string
-  created_at: string
-  updated_at: string
-}
-
-interface GitHubRepo {
-  name: string
-  owner: {
-    login: string
-  }
-  description?: string
-  html_url: string
-  language?: string
-  stargazers_count: number
-  forks_count: number
-}
 
 export async function POST(request: Request) {
   try {
@@ -55,10 +26,10 @@ export async function POST(request: Request) {
       )
     }
 
-    const [owner, name] = repo.split('/')
+    const [, ] = repo.split('/') // Extract owner and name but don't use them
 
     // Find repository in database
-    let repository = await (prisma as any).repository.findUnique({
+    let repository = await prisma.repository.findUnique({
       where: { fullName: repo },
       include: {
         scans: {
@@ -90,9 +61,9 @@ export async function POST(request: Request) {
     }
 
     // Find repository without scans for further operations
-    const repositoryData = await (prisma as any).repository.findUnique({
-      where: { fullName: repo }
-    })
+    // const repositoryData = await prisma.repository.findUnique({
+    //   where: { fullName: repo }
+    // })
 
     if (!repository) {
       // Fetch repository info from GitHub
@@ -141,7 +112,7 @@ export async function POST(request: Request) {
       const repoData: GitHubRepo = await repoResponse.json()
       console.log(`Repository data fetched: ${repoData.name}, stars: ${repoData.stargazers_count}`)
 
-      repository = await (prisma as any).repository.create({
+      repository = await prisma.repository.create({
         data: {
           name: repoData.name,
           owner: repoData.owner.login,
@@ -152,12 +123,19 @@ export async function POST(request: Request) {
           stars: repoData.stargazers_count,
           forks: repoData.forks_count
         }
-      })
+      }) as any
       
-      console.log(`Repository created in database with ID: ${repository.id}`)
+      console.log(`Repository created in database with ID: ${repository?.id}`)
     } else {
       // Use existing repository without scans
-      console.log(`Using existing repository with ID: ${repository.id}`)
+      console.log(`Using existing repository with ID: ${repository!.id}`)
+    }
+
+    if (!repository) {
+      return NextResponse.json(
+        { error: 'Repository creation failed' },
+        { status: 500 }
+      )
     }
 
     let allIssues: GitHubIssue[] = []
@@ -262,10 +240,10 @@ export async function POST(request: Request) {
         const embedding = await EmbeddingService.generateEmbedding(textToEmbed)
 
         // Create or update issue with embedding
-        const issue = await (prisma as any).issue.upsert({
+        const issue = await prisma.issue.upsert({
           where: {
             repositoryId_issueNumber: {
-              repositoryId: repository.id,
+              repositoryId: repository!.id,
               issueNumber: issueData.number
             }
           },
@@ -273,35 +251,35 @@ export async function POST(request: Request) {
             title: issueData.title,
             description: issueData.body,
             status: issueData.state,
-            priority: determinePriority(issueData.labels),
+            priority: 'medium', // Default priority
             labels: issueData.labels.map(label => label.name),
-            author: issueData.user.login,
-            authorUrl: issueData.user.html_url,
+            author: issueData.user?.login || '',
+            authorUrl: issueData.user?.html_url,
             url: issueData.html_url,
             embedding
           },
           create: {
-            repositoryId: repository.id,
+            repositoryId: repository!.id,
             issueNumber: issueData.number,
             title: issueData.title,
             description: issueData.body,
             status: issueData.state,
-            priority: determinePriority(issueData.labels),
+            priority: 'medium', // Default priority
             labels: issueData.labels.map(label => label.name),
-            author: issueData.user.login,
-            authorUrl: issueData.user.html_url,
+            author: issueData.user?.login || '',
+            authorUrl: issueData.user?.html_url,
             url: issueData.html_url,
             embedding
           }
-        })
+        }) as any
 
         storedIssues.push(issue)
       }
 
       // Create scan record
-      const scan = await (prisma as any).scan.create({
+      const scan = await prisma.scan.create({
         data: {
-          repositoryId: repository.id,
+          repositoryId: repository!.id,
           issuesFetched: storedIssues.length,
           cachedSuccessfully: true,
           scanData: {
@@ -313,7 +291,7 @@ export async function POST(request: Request) {
             filteredPullRequests: allIssues.length - actualIssues.length
           }
         }
-      })
+      }) as any
 
       const response = {
         repo,
@@ -341,17 +319,3 @@ export async function POST(request: Request) {
   }
 }
 
-// Helper function to determine priority based on labels
-function determinePriority(labels: Array<{ name: string }>): string {
-  const labelNames = labels.map(label => label.name.toLowerCase())
-  
-  if (labelNames.some(name => name.includes('critical') || name.includes('urgent'))) {
-    return 'critical'
-  } else if (labelNames.some(name => name.includes('high') || name.includes('priority') || name.includes('important'))) {
-    return 'high'
-  } else if (labelNames.some(name => name.includes('low'))) {
-    return 'low'
-  }
-  
-  return 'medium'
-}

@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 import { PrismaClient } from '@prisma/client'
+import { RepositoryEntity, IssueEntity, AnalysisResult } from '@/types'
 
 const prisma = new PrismaClient()
 
 // Simple in-memory cache for analysis results (fallback when Redis is not available)
-const analysisCache = new Map<string, { data: any; timestamp: number }>()
+const analysisCache = new Map<string, { data: AnalysisResult; timestamp: number }>()
 const CACHE_DURATION = 60 * 60 * 1000 // 1 hour in milliseconds
 
 export async function POST(request: Request) {
@@ -40,13 +41,13 @@ export async function POST(request: Request) {
     const cached = analysisCache.get(cacheKey)
     const now = Date.now()
     
-    let analysisData
+    let analysisData: AnalysisResult
     if (cached && (now - cached.timestamp) < CACHE_DURATION) {
       console.log(`Cache hit for ${repo} analysis, age: ${Math.round((now - cached.timestamp) / 1000)}s`)
       analysisData = cached.data
     } else {
       // Find repository in database with all issues
-      const repository = await (prisma as any).repository.findUnique({
+      const repository = await prisma.repository.findUnique({
         where: { fullName: repo },
         include: {
           issues: {
@@ -75,10 +76,10 @@ export async function POST(request: Request) {
       
       // Debug: Log priority distribution
       const priorityCounts = {
-        critical: repository.issues.filter((i: any) => i.priority === 'critical').length,
-        high: repository.issues.filter((i: any) => i.priority === 'high').length,
-        medium: repository.issues.filter((i: any) => i.priority === 'medium').length,
-        low: repository.issues.filter((i: any) => i.priority === 'low').length
+        critical: repository.issues.filter((i: IssueEntity) => i.priority === 'critical').length,
+        high: repository.issues.filter((i: IssueEntity) => i.priority === 'high').length,
+        medium: repository.issues.filter((i: IssueEntity) => i.priority === 'medium').length,
+        low: repository.issues.filter((i: IssueEntity) => i.priority === 'low').length
       }
       console.log(`Priority distribution for ${repo}:`, priorityCounts)
       
@@ -86,44 +87,63 @@ export async function POST(request: Request) {
       const analysis = generateAnalysis(repository, relevantIssues, prompt)
       
       // Prepare analysis data
-      analysisData = {
+      const cacheData: AnalysisResult = {
         analysis,
+        analysisTimestamp: new Date().toISOString(),
         prompt: prompt,
         repository: {
+          id: repository.id,
           name: repository.name,
+          owner: repository.owner,
           fullName: repository.fullName,
-          description: repository.description,
+          description: repository.description || undefined,
+          url: repository.url,
           stars: repository.stars,
           forks: repository.forks,
-          language: repository.language,
+          language: repository.language || undefined,
+          createdAt: repository.createdAt,
+          updatedAt: repository.updatedAt,
           totalIssues: repository.issues.length
         },
-        allRelevantIssues: relevantIssues.map(issue => ({
-          id: issue.id,
+        allRelevantIssues: relevantIssues.map((issue: IssueEntity) => ({
+          id: issue.id.toString(),
+          repositoryId: issue.repositoryId,
           issueNumber: issue.issueNumber,
           title: issue.title,
-          description: issue.description,
-          status: issue.status,
-          priority: issue.priority,
+          description: issue.description || undefined,
+          status: issue.status as 'open' | 'closed',
+          priority: issue.priority as 'critical' | 'high' | 'medium' | 'low',
           labels: issue.labels,
-          author: issue.author,
+          author: issue.author || '',
+          authorUrl: issue.authorUrl || undefined,
           url: issue.url,
-          createdAt: issue.createdAt
+          createdAt: issue.createdAt.toISOString(),
+          updatedAt: issue.updatedAt
         })),
+        relevantIssues: [], // Will be populated after pagination
         summary: {
           totalIssues: repository.issues.length,
           relevantIssues: relevantIssues.length,
-          openIssues: repository.issues.filter((i: any) => i.status === 'open').length,
-          closedIssues: repository.issues.filter((i: any) => i.status === 'closed').length,
-          highPriorityIssues: repository.issues.filter((i: any) => i.priority === 'high' || i.priority === 'critical').length
-        }
+          openIssues: repository.issues.filter((i: IssueEntity) => i.status === 'open').length,
+          closedIssues: repository.issues.filter((i: IssueEntity) => i.status === 'closed').length,
+          highPriorityIssues: repository.issues.filter((i: IssueEntity) => i.priority === 'high' || i.priority === 'critical').length
+        },
+        pagination: {
+          currentPage: 1,
+          totalPages: 1,
+          totalItems: relevantIssues.length,
+          itemsPerPage: limitNum,
+          hasNextPage: false,
+          hasPreviousPage: false
+        },
+        cached: false
       }
-
-      // Cache the analysis for 1 hour
+      
       analysisCache.set(cacheKey, {
-        data: analysisData,
+        data: cacheData,
         timestamp: now
       })
+      analysisData = cacheData
       console.log(`Cached analysis for ${repo}`)
     }
 
@@ -159,22 +179,7 @@ export async function POST(request: Request) {
   }
 }
 
-// Function to clear cache for a specific repository
-export function clearAnalysisCache(repo?: string) {
-  if (repo) {
-    // Clear all cache entries for this repository
-    const keysToDelete = Array.from(analysisCache.keys()).filter(key => key.startsWith(`${repo}:`))
-    keysToDelete.forEach(key => analysisCache.delete(key))
-    console.log(`Cleared ${keysToDelete.length} cache entries for repository: ${repo}`)
-  } else {
-    // Clear all cache
-    const size = analysisCache.size
-    analysisCache.clear()
-    console.log(`Cleared all ${size} cache entries`)
-  }
-}
-
-function analyzeIssues(issues: any[], prompt: string) {
+function analyzeIssues(issues: IssueEntity[], prompt: string) {
   const promptLower = prompt.toLowerCase()
   const keywords = extractKeywords(promptLower)
   
@@ -194,9 +199,7 @@ function analyzeIssues(issues: any[], prompt: string) {
     if (titleMatch) score += 10
     
     // Description matching (medium weight)
-    const descMatch = issue.description && keywords.some(keyword => 
-      issue.description.toLowerCase().includes(keyword)
-    )
+    const descMatch = keywords.some(keyword => issue.description?.toLowerCase().includes(keyword) || false)
     if (descMatch) score += 5
     
     // Label matching (medium weight)
@@ -275,11 +278,11 @@ function extractKeywords(prompt: string): string[] {
   return keywords.length > 0 ? keywords : words.slice(0, 5)
 }
 
-function generateAnalysis(repository: any, relevantIssues: any[], prompt: string) {
-  const totalIssues = repository.issues.length
-  const openIssues = repository.issues.filter((i: any) => i.status === 'open').length
-  const closedIssues = repository.issues.filter((i: any) => i.status === 'closed').length
-  const highPriorityIssues = repository.issues.filter((i: any) => i.priority === 'high').length
+function generateAnalysis(repository: RepositoryEntity, relevantIssues: IssueEntity[], prompt: string) {
+  const totalIssues = repository.issues?.length || 0
+  const openIssues = repository.issues?.filter((i: IssueEntity) => i.status === 'open').length || 0
+  const closedIssues = repository.issues?.filter((i: IssueEntity) => i.status === 'closed').length || 0
+  const highPriorityIssues = repository.issues?.filter((i: IssueEntity) => i.priority === 'high').length || 0
   
   const promptLower = prompt.toLowerCase()
   let analysis = `# Repository Analysis: ${repository.fullName}\n\n`
