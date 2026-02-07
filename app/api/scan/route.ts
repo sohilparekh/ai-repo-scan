@@ -145,21 +145,51 @@ export async function POST(request: Request) {
     try {
       // Keep fetching pages until there are no more issues using cursor-based pagination
       while (true) {
+        // Add delay to avoid rate limiting (especially important for large repositories)
+        if (pageCount > 0) {
+          console.log(`Waiting 1 second before fetching page ${pageCount + 1}...`)
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+
         // Build URL with cursor if available
         let url = `https://api.github.com/repos/${repo}/issues?state=all&per_page=100`
         if (cursor) {
           url += `&after=${cursor}`
         }
 
-        const response = await fetch(url, {
-          headers: {
-            'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'AI-Scanner/1.0',
-            ...(process.env.GH_TOKEN && {
-              'Authorization': `token ${process.env.GH_TOKEN}`
+        let response: Response
+        let retryCount = 0
+        const maxRetries = 3
+
+        // Retry logic for failed requests
+        while (retryCount < maxRetries) {
+          try {
+            response = await fetch(url, {
+              headers: {
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'AI-Scanner/1.0',
+                ...(process.env.GH_TOKEN && {
+                  'Authorization': `token ${process.env.GH_TOKEN}`
+                })
+              },
+              // Add timeout to prevent hanging requests
+              signal: AbortSignal.timeout(30000) // 30 second timeout
             })
+            break
+          } catch (error) {
+            retryCount++
+            console.log(`Request failed (attempt ${retryCount}/${maxRetries}):`, error)
+            
+            if (retryCount >= maxRetries) {
+              throw error
+            }
+            
+            // Wait before retry with exponential backoff
+            const waitTime = Math.pow(2, retryCount) * 1000
+            console.log(`Waiting ${waitTime}ms before retry...`)
+            await new Promise(resolve => setTimeout(resolve, waitTime))
           }
-        })
+        }
 
         console.log(`GitHub API response status: ${response.status} for page ${pageCount + 1}`)
         

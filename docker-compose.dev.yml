@@ -8,12 +8,6 @@ services:
       - "${PORT:-3000}:${PORT:-3000}"
     env_file:
       - .env.development.local
-    environment:
-      - NODE_ENV=development
-      - DATABASE_URL=postgresql://postgres:password@postgres:5432/ai_db_dev
-      - REDIS_URL=redis://redis:6379
-      - NEXTAUTH_URL=http://localhost:${PORT:-3000}
-      - WATCHPACK_POLLING=true
     depends_on:
       postgres:
         condition: service_healthy
@@ -30,7 +24,6 @@ services:
     restart: unless-stopped
     stdin_open: true
     tty: true
-
   # PostgreSQL Database (Development)
   postgres:
     image: pgvector/pgvector:pg15
@@ -51,7 +44,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
   # Redis Cache (Development)
   redis:
     image: redis:7-alpine
@@ -67,15 +59,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-
   # pgAdmin (Development)
   pgadmin:
     image: dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
-      PGADMIN_CONFIG_SERVER_MODE: 'False'
-      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+    env_file:
+      - .env.development.local
     ports:
       - "${PGADMIN_PORT:-5050}:80"
     volumes:
@@ -88,7 +76,6 @@ services:
         condition: service_healthy
     profiles:
       - dev
-
 volumes:
   postgres_dev_data:
     driver: local
@@ -96,7 +83,6 @@ volumes:
     driver: local
   pgadmin_dev_data:
     driver: local
-
 networks:
   ai-network:
     driver: bridge

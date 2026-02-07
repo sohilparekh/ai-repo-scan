@@ -98,11 +98,14 @@ Copy `.env.example` to `.env.local` and configure:
 
 ```env
 # Database Configuration
-DATABASE_URL="postgresql://postgres:password@localhost:5432/ai_db"
-DIRECT_URL="postgresql://postgres:password@localhost:5432/ai_db"
+POSTGRES_DB=ai_db_dev
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=password
+POSTGRES_PORT=5432
 
 # Redis Configuration
-REDIS_URL="redis://localhost:6379"
+REDIS_URL=redis://redis:6379
+REDIS_PORT=6379
 
 # NextAuth Configuration
 NEXTAUTH_SECRET="your-secret-key-here"
