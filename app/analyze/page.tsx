@@ -7,7 +7,7 @@ import Statistics from '@/components/Statistics'
 import GeneralObservations from '@/components/GeneralObservations'
 import Recommendations from '@/components/Recommendations'
 import BugAnalysis from '@/components/BugAnalysis'
-import { AnalysisResult } from '@/types'
+import { AnalysisResult } from '@/lib/types'
 
 export default function AnalyzePage() {
   const [repo, setRepo] = useState('')

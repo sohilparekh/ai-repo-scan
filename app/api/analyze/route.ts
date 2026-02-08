@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
-import { RepositoryEntity, IssueEntity, AnalysisResult } from '@/types'
-
-const prisma = new PrismaClient()
+import { RepositoryEntity, IssueEntity, AnalysisResult } from '@/lib/types'
+import { RepositoryService } from '@/lib/database/services'
 
 // Simple in-memory cache for analysis results (fallback when Redis is not available)
 const analysisCache = new Map<string, { data: AnalysisResult; timestamp: number }>()
@@ -47,15 +45,7 @@ export async function POST(request: Request) {
       analysisData = cached.data
     } else {
       // Find repository in database with all issues
-      const repository = await prisma.repository.findUnique({
-        where: { fullName: repo },
-        include: {
-          issues: {
-            orderBy: { createdAt: 'desc' }
-            // Get ALL issues for comprehensive analysis
-          }
-        }
-      })
+      const repository = await RepositoryService.findByFullName(repo)
 
       if (!repository) {
         return NextResponse.json(

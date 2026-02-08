@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
 import { EmbeddingService } from '@/lib/embedding'
-import { GitHubRepo, GitHubIssue } from '@/types'
-
-const prisma = new PrismaClient()
+import { GitHubRepo, GitHubIssue } from '@/lib/types'
+import { RepositoryService, IssueService, ScanService } from '@/lib/database/services'
 
 export async function POST(request: Request) {
   try {
@@ -29,15 +27,7 @@ export async function POST(request: Request) {
     const [, ] = repo.split('/') // Extract owner and name but don't use them
 
     // Find repository in database
-    let repository = await prisma.repository.findUnique({
-      where: { fullName: repo },
-      include: {
-        scans: {
-          orderBy: { createdAt: 'desc' },
-          take: 1
-        }
-      }
-    })
+    let repository = await RepositoryService.findByFullName(repo)
 
     // Check if repository exists and has been scanned recently (unless forceRescan is true)
     if (repository && repository.scans.length > 0 && !forceRescan) {
@@ -112,17 +102,15 @@ export async function POST(request: Request) {
       const repoData: GitHubRepo = await repoResponse.json()
       console.log(`Repository data fetched: ${repoData.name}, stars: ${repoData.stargazers_count}`)
 
-      repository = await prisma.repository.create({
-        data: {
-          name: repoData.name,
-          owner: repoData.owner.login,
-          fullName: repo,
-          description: repoData.description,
-          url: repoData.html_url,
-          language: repoData.language,
-          stars: repoData.stargazers_count,
-          forks: repoData.forks_count
-        }
+      repository = await RepositoryService.create({
+        name: repoData.name,
+        owner: repoData.owner.login,
+        fullName: repo,
+        description: repoData.description,
+        url: repoData.html_url,
+        language: repoData.language,
+        stars: repoData.stargazers_count,
+        forks: repoData.forks_count
       }) as any
       
       console.log(`Repository created in database with ID: ${repository?.id}`)
@@ -144,7 +132,8 @@ export async function POST(request: Request) {
 
     try {
       // Keep fetching pages until there are no more issues using cursor-based pagination
-      while (true) {
+      let shouldPaginate = true
+      while (shouldPaginate) {
         // Add delay to avoid rate limiting (especially important for large repositories)
         if (pageCount > 0) {
           console.log(`Waiting 1 second before fetching page ${pageCount + 1}...`)
@@ -157,14 +146,14 @@ export async function POST(request: Request) {
           url += `&after=${cursor}`
         }
 
-        let response: Response
+        // Retry logic for failed requests
         let retryCount = 0
         const maxRetries = 3
+        let fetchResponse: Response
 
-        // Retry logic for failed requests
         while (retryCount < maxRetries) {
           try {
-            response = await fetch(url, {
+            fetchResponse = await fetch(url, {
               headers: {
                 'Accept': 'application/vnd.github.v3+json',
                 'User-Agent': 'AI-Scanner/1.0',
@@ -175,7 +164,75 @@ export async function POST(request: Request) {
               // Add timeout to prevent hanging requests
               signal: AbortSignal.timeout(30000) // 30 second timeout
             })
-            break
+
+            console.log(`GitHub API response status: ${fetchResponse.status} for page ${pageCount + 1}`)
+            
+            // Get the Link header for pagination info
+            const linkHeader = fetchResponse.headers.get('link')
+            console.log(`Link header: ${linkHeader}`)
+
+            if (!fetchResponse.ok) {
+              const errorText = await fetchResponse.text()
+              console.log(`GitHub API error response: ${errorText}`)
+              
+              if (fetchResponse.status === 403) {
+                return NextResponse.json(
+                  { error: `API rate limit exceeded. Please add GH_TOKEN environment variable. Details: ${errorText}` },
+                  { status: 429 }
+                )
+              } else if (fetchResponse.status === 404) {
+                return NextResponse.json(
+                  { error: `Repository not found or no access. Details: ${errorText}` },
+                  { status: 404 }
+                )
+              } else if (fetchResponse.status === 401) {
+                return NextResponse.json(
+                  { error: `Invalid GitHub token. Please check GH_TOKEN. Details: ${errorText}` },
+                  { status: 401 }
+                )
+              }
+              throw new Error(`GitHub API error: ${fetchResponse.status} - ${errorText}`)
+            }
+
+            const pageIssues: GitHubIssue[] = await fetchResponse.json()
+            console.log(`Fetched ${pageIssues.length} issues from page ${pageCount + 1}`)
+
+            // If no more issues, we're done
+            if (pageIssues.length === 0) {
+              shouldPaginate = false
+              break
+            }
+
+            allIssues = allIssues.concat(pageIssues)
+            pageCount++
+
+            // Extract the next cursor from the Link header
+            if (linkHeader) {
+              const nextLink = linkHeader.split(',').find((link: string) => link.includes('rel="next"'))
+              if (nextLink) {
+                const match = nextLink.match(/after=([^&>]+)/)
+                if (match) {
+                  cursor = decodeURIComponent(match[1])
+                  console.log(`Next cursor: ${cursor}`)
+                }
+              }
+            }
+
+            // Safety check to avoid infinite loops
+            if (pageCount >= 100) {
+              console.log('Reached safety limit of 100 pages, stopping pagination')
+              shouldPaginate = false
+              break
+            }
+
+            // Check if there are more pages by looking at the Link header
+            if (!linkHeader || !linkHeader.includes('rel="next"')) {
+              console.log('No more pages available, stopping pagination')
+              shouldPaginate = false
+              break
+            }
+
+            break // Exit retry loop on success
           } catch (error) {
             retryCount++
             console.log(`Request failed (attempt ${retryCount}/${maxRetries}):`, error)
@@ -189,68 +246,6 @@ export async function POST(request: Request) {
             console.log(`Waiting ${waitTime}ms before retry...`)
             await new Promise(resolve => setTimeout(resolve, waitTime))
           }
-        }
-
-        console.log(`GitHub API response status: ${response.status} for page ${pageCount + 1}`)
-        
-        // Get the Link header for pagination info
-        const linkHeader = response.headers.get('link')
-        console.log(`Link header: ${linkHeader}`)
-
-        if (!response.ok) {
-          const errorText = await response.text()
-          console.log(`GitHub API error response: ${errorText}`)
-          
-          if (response.status === 403) {
-            return NextResponse.json(
-              { error: `API rate limit exceeded. Please add GH_TOKEN environment variable. Details: ${errorText}` },
-              { status: 429 }
-            )
-          } else if (response.status === 404) {
-            return NextResponse.json(
-              { error: `Repository not found or no access. Details: ${errorText}` },
-              { status: 404 }
-            )
-          } else if (response.status === 401) {
-            return NextResponse.json(
-              { error: `Invalid GitHub token. Please check GH_TOKEN. Details: ${errorText}` },
-              { status: 401 }
-            )
-          }
-          throw new Error(`GitHub API error: ${response.status} - ${errorText}`)
-        }
-
-        const pageIssues: GitHubIssue[] = await response.json()
-        console.log(`Fetched ${pageIssues.length} issues from page ${pageCount + 1}`)
-
-        // If no more issues, we're done
-        if (pageIssues.length === 0) break
-
-        allIssues = allIssues.concat(pageIssues)
-        pageCount++
-
-        // Extract the next cursor from the Link header
-        if (linkHeader) {
-          const nextLink = linkHeader.split(',').find(link => link.includes('rel="next"'))
-          if (nextLink) {
-            const match = nextLink.match(/after=([^&>]+)/)
-            if (match) {
-              cursor = decodeURIComponent(match[1])
-              console.log(`Next cursor: ${cursor}`)
-            }
-          }
-        }
-
-        // Safety check to avoid infinite loops
-        if (pageCount >= 100) {
-          console.log('Reached safety limit of 100 pages, stopping pagination')
-          break
-        }
-
-        // Check if there are more pages by looking at the Link header
-        if (!linkHeader || !linkHeader.includes('rel="next"')) {
-          console.log('No more pages available, stopping pagination')
-          break
         }
       }
 
@@ -270,56 +265,35 @@ export async function POST(request: Request) {
         const embedding = await EmbeddingService.generateEmbedding(textToEmbed)
 
         // Create or update issue with embedding
-        const issue = await prisma.issue.upsert({
-          where: {
-            repositoryId_issueNumber: {
-              repositoryId: repository!.id,
-              issueNumber: issueData.number
-            }
-          },
-          update: {
-            title: issueData.title,
-            description: issueData.body,
-            status: issueData.state,
-            priority: 'medium', // Default priority
-            labels: issueData.labels.map(label => label.name),
-            author: issueData.user?.login || '',
-            authorUrl: issueData.user?.html_url,
-            url: issueData.html_url,
-            embedding
-          },
-          create: {
-            repositoryId: repository!.id,
-            issueNumber: issueData.number,
-            title: issueData.title,
-            description: issueData.body,
-            status: issueData.state,
-            priority: 'medium', // Default priority
-            labels: issueData.labels.map(label => label.name),
-            author: issueData.user?.login || '',
-            authorUrl: issueData.user?.html_url,
-            url: issueData.html_url,
-            embedding
-          }
+        const issue = await IssueService.upsert({
+          repositoryId: repository!.id,
+          issueNumber: issueData.number,
+          title: issueData.title,
+          description: issueData.body,
+          status: issueData.state,
+          priority: 'medium', // Default priority
+          labels: issueData.labels.map(label => label.name),
+          author: issueData.user?.login || '',
+          authorUrl: issueData.user?.html_url,
+          url: issueData.html_url,
+          embedding
         }) as any
 
         storedIssues.push(issue)
       }
 
       // Create scan record
-      const scan = await prisma.scan.create({
-        data: {
-          repositoryId: repository!.id,
-          issuesFetched: storedIssues.length,
-          cachedSuccessfully: true,
-          scanData: {
-            timestamp: new Date().toISOString(),
-            totalIssues: storedIssues.length,
-            openIssues: storedIssues.filter(i => i.status === 'open').length,
-            closedIssues: storedIssues.filter(i => i.status === 'closed').length,
-            totalApiIssues: allIssues.length,
-            filteredPullRequests: allIssues.length - actualIssues.length
-          }
+      const scan = await ScanService.create({
+        repositoryId: repository!.id,
+        issuesFetched: storedIssues.length,
+        cachedSuccessfully: true,
+        scanData: {
+          timestamp: new Date().toISOString(),
+          totalIssues: storedIssues.length,
+          openIssues: storedIssues.filter(i => i.status === 'open').length,
+          closedIssues: storedIssues.filter(i => i.status === 'closed').length,
+          totalApiIssues: allIssues.length,
+          filteredPullRequests: allIssues.length - actualIssues.length
         }
       }) as any
 
@@ -328,7 +302,7 @@ export async function POST(request: Request) {
         issues_fetched: storedIssues.length,
         cached_successfully: true,
         scan_id: scan.id,
-        repository_id: repository.id,
+        repository_id: repository!.id,
         scan_data: scan.scanData
       }
 
